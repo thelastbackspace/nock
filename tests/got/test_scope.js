@@ -3,6 +3,7 @@ import { expect } from 'chai'
 import sinon from 'sinon'
 import { Interceptor } from '../../lib/interceptor.ts'
 import nock from '../../index.ts'
+import ts from 'typescript'
 import got from './got_client.js'
 
 it('scope exposes interceptors', () => {
@@ -202,5 +203,51 @@ describe('filteringRequestBody()', () => {
       await got.post('http://example.test/')
       expect(postScope.isDone()).to.be.true()
     })
+  })
+})
+
+describe('filtering method typings', () => {
+  // https://github.com/nock/nock/issues/3054
+  it('accepts the documented filteringPath() and filteringRequestBody() arguments', function () {
+    this.timeout(30000)
+
+    const fileName = path.join(import.meta.dirname, '__filtering_typings__.ts')
+    const source = `
+      import nock from '../../index.ts'
+
+      nock('http://example.test')
+        .filteringPath(/\\d/g, '3')
+        .filteringPath(path => path.toLowerCase())
+        .filteringRequestBody(/secret/, 'x')
+        .filteringRequestBody((body, recordedBody) => body + recordedBody)
+        .get('/')
+        .reply(200)
+    `
+    const options = {
+      strict: true,
+      noEmit: true,
+      module: ts.ModuleKind.NodeNext,
+      moduleResolution: ts.ModuleResolutionKind.NodeNext,
+      allowImportingTsExtensions: true,
+      target: ts.ScriptTarget.ES2022,
+      types: ['node'],
+      esModuleInterop: true,
+      skipLibCheck: true,
+    }
+    const host = ts.createCompilerHost(options)
+    const getSourceFile = host.getSourceFile
+    host.getSourceFile = (name, languageVersion, ...rest) =>
+      name === fileName
+        ? ts.createSourceFile(name, source, languageVersion)
+        : getSourceFile.call(host, name, languageVersion, ...rest)
+    const fileExists = host.fileExists
+    host.fileExists = name => name === fileName || fileExists.call(host, name)
+
+    const program = ts.createProgram([fileName], options, host)
+    const messages = ts
+      .getPreEmitDiagnostics(program, program.getSourceFile(fileName))
+      .map(d => ts.flattenDiagnosticMessageText(d.messageText, '\n'))
+
+    expect(messages).to.deep.equal([])
   })
 })
